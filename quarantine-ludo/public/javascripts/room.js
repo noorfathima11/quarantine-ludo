@@ -19,6 +19,8 @@ var pc = new RTCPeerConnection(rtc_config);
 
 //set data channel
 var dc = null;
+// making another data channel
+var gdc = null // Game data channel
 
 //declare DOM elements for chat
 var chatLog = document.querySelector("#chat-log");
@@ -96,7 +98,10 @@ pc.onconnectionstatechange = function (e) {
     if (clientIs.polite) {
       console.log("Creating a data channel on the initiating side");
       dc = pc.createDataChannel("text chat");
-      addDataChannelEventListner(dc);
+      // we are letting the polite one estavlish the channe;
+      gdc = pc.createDataChannel("game data") 
+      addDataChannelEventListner(dc); 
+      // need to add game events
     }
   }
 };
@@ -105,8 +110,13 @@ pc.onconnectionstatechange = function (e) {
 // This will on fire on receiving end of the connection
 pc.ondatachannel = function (e) {
   console.log("Data Channel is open");
-  dc = e.channel;
-  addDataChannelEventListner(dc);
+  if(e.channel.label == 'text chat'){
+    dc = e.channel;
+    addDataChannelEventListner(dc);
+  }
+  if(e.channel.label == "game data"){
+    gdc = e.channel
+  }
 };
 
 //video Streams
@@ -349,7 +359,7 @@ function changePlayer() {
 }
 
 //Check free pawns
-function DontHaveOtherFree() {
+function dontHaveOtherFree() {
   
   var block;
   if(text.innerText == 'green'){
@@ -383,13 +393,14 @@ dice.addEventListener("click", function (e) {
     dice.style.backgroundImage = "url(images/" + num + ".jpg)";
     clicked = true;
     
-    if (num != 6 && DontHaveOtherFree()) {
+    if (num != 6 && dontHaveOtherFree()) {
       badtext.innerText = "Unfortunately you are stuck";
+      gdc.send({ data: { action: 'fire', message: badtext.innerText } });
       window.setTimeout(changePlayer, 1000);
       clicked = false;
     }
 
-    if (num != 6 && !DontHaveOtherFree()) {
+    if (num != 6 && !dontHaveOtherFree()) {
       badtext.innerText = "Click your pawn";
       clicked = false;
       n = num;
@@ -397,7 +408,7 @@ dice.addEventListener("click", function (e) {
 
 
     //if number is 6 move pawn from player block to board
-  if(num == 6 && DontHaveOtherFree()){
+  if(num == 6 && dontHaveOtherFree()){
     if(text.innerText == 'green'){
       var g1 = document.querySelector('#g1');
       g1.appendChild(greenpawn1);
@@ -428,8 +439,13 @@ dice.addEventListener("click", function (e) {
   }
 
   //If number not 6 change player
-
+  gdc.onmessage = function(e){
+    var data = JSON.parse(e.data)
+    console.log(`Heard this action: ${data.action}`)
+  }
 });
+
+
 
 // Random num move for all pawns
 function randomMove(Color, paw, number) {
