@@ -65,7 +65,7 @@ sc.on('new connected peer', function(peer){
 sc.on('new disconnected peer', function(peer) {
   console.log(`The ${peer} has disconnected`)
   peers = removePeer(peers, peer)
-  removeVideo(peer)
+  // removeVideo(peer)
   console.log('The remainning connected peers are:\n', peers)
 })
 
@@ -373,9 +373,9 @@ function appendVideoToRespectivePlayers(peer) {
 }
 
 // Utlity function to remove videos from the DOM
-function removeVideo(peer) {
-  document.querySelector('#video-' + peer.split('#')[1]).remove();
-}
+// function removeVideo(peer) {
+//   document.querySelector('#video-' + peer.split('#')[1]).remove();
+// }
 
 
 
