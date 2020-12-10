@@ -1,24 +1,39 @@
-console.log(NAMESPACE);
-var sc = io.connect("/" + NAMESPACE);
+// Use `sc` for the signaling channel...
+var sc = io.connect('/' + NAMESPACE);
 
-var rtc_config = { 
+// Using Google's STUN servers
+var rtc_config = {
   iceServers: [
     {
       urls: ['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']
     }
   ]
 };
+
 var pc = new RTCPeerConnection(rtc_config);
-var peers;
+
+// Track self id from socket.io
 var self_id;
+// Array for tracking IDs of connected peers
+// TODO: Refactor this so only the `pcs` object is needed?
+var peers;
 
-var pcs = {}
+// Object to hold each per-ID RTCPeerConnection and client state
+var pcs = {};
 
+// Object to hold peer video streams
 var peer_streams = {};
-//set data channel
+
+// Let's handle video streams...
+// Set up simple media_constraints
+// (disable audio for classroom demo purposes)
+var media_constraints = { video: true, audio: false };
+
 var dc = null;
-// making another data channel
-var gdc = null // Game data channel
+// Handle self video
+// TODO: Add a Start Video button that handles all of this
+// Problems on iOS with requesting media on page load, it seems.
+var stream = new MediaStream();
 
 //declare DOM elements for chat
 var chatLog = document.querySelector("#chat-log");
@@ -28,40 +43,50 @@ var chatButton = document.querySelector("#send-button");
 var joinForm = document.querySelector("#join-form");
 var joinName = document.querySelector("#join-name");
 
-function removePeer(peers, id) {
-  let index = peers.indexOf(id);
-  if(index === -1){
-    return
-  }
-  peers.splice(index, 1)
-  return peers;
-}
+/*
+  Signaling Logic
+*/
 
-sc.on("message", function (data) {
-  console.log(`${data}`);
+// Basic connection diagnostic and self_id assignment
+sc.on('message', function(data) {
+  console.log('Message received:\n', data);
+  // Set self_id
   self_id = sc.id;
-
 });
 
-sc.on('connected peers', function(data){
-  peers=removePeer(data, sc.id)
-  console.log("The connected peers are:\n", peers)
-  sc.emit('new connected peer', sc.id)
-  for(let peer of peers){
-    establishPeer(peer, false);
+// Receive payload of already-connected peers that socket.io knows about
+sc.on('connected peers', function(data) {
+  // Remove self from peers array
+  peers = removePeer(data,sc.id);
+  // Log out the array of connected peers
+  console.log('Connected peers:\n', peers);
+  // Client announces to everyone else that it has connected
+  sc.emit('new connected peer', sc.id);
+  // Set up connections with existing peers
+  for (var peer of peers) {
+    // Establish peer; set politeness to false with existing peers
+    // Existing peers will themselves be polite (true)
+    establishPeer(peer,false);
   }
-})
+});
 
-sc.on('new connected peer', function(peer){
-  console.log('The new connected peer is: ', peer)
-  peers.push(peer)
-  console.log('The new connected peers are:\n', peers)
-  establishPeer(peer, true);
+// Receive payload of a newly connected peer
+sc.on('new connected peer', function(peer) {
+  console.log('New connected peer:', peer);
+  // Add the new peer to the peers array
+  peers.push(peer);
+  // Log out the new array of connected peers
+  console.log('New connected peers:\n', peers);
+  // Set up connection with new peer; be polite
+  establishPeer(peer,true);
+  // Add video stream tracks to new peer connection
+  // TODO: Move this into the establishPeer fuction?
   for (var track of stream.getTracks()) {
     pcs[peer].conn.addTrack(track);
   }
-})
+});
 
+// Rececive payload of newly disconnected peer
 sc.on('new disconnected peer', function(peer) {
   console.log(`The ${peer} has disconnected`)
   peers = removePeer(peers, peer)
@@ -69,6 +94,87 @@ sc.on('new disconnected peer', function(peer) {
   console.log('The remainning connected peers are:\n', peers)
 })
 
+// Signals are now only over private messages to avoid cross-talk
+sc.on('signal', async function({ to, from, candidate, description }) {
+  // `from` is key to figuring out who we're negotiating a connection with
+  var pc = pcs[from].conn;
+  var clientIs = pcs[from].clientIs; // Set up when pcs object is populated
+
+  try {
+    if (description) {
+      // W3C/WebRTC Specification Perfect Negotiation Pattern:
+      // https://w3c.github.io/webrtc-pc/#example-18
+      var readyForOffer =
+            !clientIs.makingOffer &&
+            (pc.signalingState == "stable" || clientIs.settingRemoteAnswerPending);
+
+      // IMPORTANT! In previous class demos, I erronously was checking for an "answer" type here
+      var offerCollision = description.type == "offer" && !readyForOffer;
+
+      clientIs.ignoringOffer = !clientIs.polite && offerCollision;
+
+      if (clientIs.ignoringOffer) {
+        return; // Just leave if we're ignoring offers
+      }
+
+      // Set the remote description...
+      try {
+        console.log('Trying to set a remote description:\n', description);
+        clientIs.settingRemoteAnswerPending = description.type == "answer";
+        await pc.setRemoteDescription(description);
+        clientIs.settingRemoteAnswerPending = false;
+      } catch(error) {
+        console.error('Error from setting local description', error);
+      }
+
+      // ...if it's an offer, we need to answer it:
+      if (description.type == 'offer') {
+        console.log('Specifically, an offer description...');
+          try {
+            // Very latest browsers are totally cool with an
+            // argument-less call to setLocalDescription:
+            await pc.setLocalDescription();
+          } catch(error) {
+            // Older (and not even all that old) browsers
+            // are NOT cool. So because we're handling an
+            // offer, we need to prepare an answer:
+            console.log('Falling back to older setLocalDescription method when receiving an offer...');
+            if (pc.signalingState == 'have-remote-offer') {
+              // create a answer, if that's what's needed...
+              console.log('Trying to prepare an answer:');
+              var offer = await pc.createAnswer();
+            } else {
+              // otherwise, create an offer
+              console.log('Trying to prepare an offer:');
+              var offer = await pc.createOffer();
+            }
+            await pc.setLocalDescription(offer);
+          } finally {
+            console.log('Sending a response:\n', pc.localDescription);
+            sc.emit('signal', { to: from, from: self_id, description: pc.localDescription });
+          }
+      }
+
+    } else if (candidate) {
+        console.log('Received a candidate:');
+        console.log(candidate);
+        // Save Safari and other browsers that can't handle an
+        // empty string for the `candidate.candidate` value:
+        try {
+          if (candidate.candidate.length > 1) {
+            await pc.addIceCandidate(candidate);
+          }
+        } catch(error) {
+          if (!clientIs.ignoringOffer) {
+            throw error;
+          }
+        }
+    }
+  } catch(error) {
+    console.error(error);
+  }
+
+});
 
 function appendMsgToChatLog(log, msg, who) {
   var li = document.createElement("li");
@@ -130,6 +236,10 @@ function addDataChannelEventListner(datachannel) {
   });
 }
 
+sc.on("joined", function (e) {
+  appendMsgToChatLog(chatLog, e, "join");
+});
+
 //Once the RTC connection is steup and connected the peer will open data channel
 pc.onconnectionstatechange = function (e) {
   if (pc.connectionState == "connected") {
@@ -157,166 +267,32 @@ pc.ondatachannel = function (e) {
   }
 };
 
-//video Streams
-var media_constraints = { video: true, audio: true };
-
-// var selfVideo = document.querySelector("#self-video");
-// var selfStream = new MediaStream();
-// selfVideo.volume = 0;
-// selfVideo.srcObject = selfStream;
-
-// var peerVideo = document.querySelector("#peer-video");
-// var peerStream = new MediaStream();
-// console.log(peerStream);
-// peerVideo.srcObject = peerStream;
-
 function sendJoinedMessage(name){
-   //send joined message with current timestamp
-   sc.emit(
-    "joined",
-    `${name} joined the chat! at ${new Date().toLocaleTimeString("en-US", {
-      hour12: true,
-      hour: "numeric",
-      minute: "numeric",
-    })}`
-  );
+  //send joined message with current timestamp
+  sc.emit(
+   "joined",
+   `${name} joined the chat! at ${new Date().toLocaleTimeString("en-US", {
+     hour12: true,
+     hour: "numeric",
+     minute: "numeric",
+   })}`
+ );
 
-  
-  //Player name Display
-  console.log("Join Name = "+ joinName.value);
-}
-var stream = new MediaStream();
-
-async function startStream() {
-  try {
-    stream = await navigator.mediaDevices.getUserMedia(media_constraints);
-    for (var track of stream.getTracks()) {
-      pc.addTrack(track);
-    }
-    //selfStream.addTrack(stream.getTracks()[0]);
-    // selfVideo.srcObject = stream;
-  } catch (error) {}
+ 
+ //Player name Display
+ console.log("Join Name = "+ joinName.value);
 }
 
 // Here we are listening for and attaching any peer tracks
 pc.ontrack = function(track){
-  peerStream.addTrack(track.track)
+ peerStream.addTrack(track.track)
 }
 
-sc.on("joined", function (e) {
-  appendMsgToChatLog(chatLog, e, "join");
-});
+/*
 
-pc.ontrack = (track) => {
-  peerStream.addTrack(track.track);
-};
+  NEGOTIATE PEER CONNECTIONS
 
-var callButton = document.querySelector("#join-button");
-
-callButton.addEventListener("click", function (e) {
-  e.preventDefault();
-  if (joinName.value !== "") {
-    joinCall(joinName.value);
-  } else {
-    alert("Enter your Name!");
-  }
-});
-
-function joinCall(name) {
-  startStream()
-  for (var pc in pcs) {
-    console.log('Negotiating connection with', pc);
-    for (var track of stream.getTracks()) {
-      try {
-        pcs[pc].conn.addTrack(track);
-      } catch(err) {
-        console.error(err);
-      }
-    }
-    negotiateConnection(pcs[pc].conn, pcs[pc].clientIs, pc);
-  }
-  sendJoinedMessage(name)
-  joinForm.hidden = true;
-}
-
-sc.on("signal", async function ({to, from, candidate, description }) {
-  var pc = pcs[from].connect;
-  var clientIs = pcs[from].clientIs;
-  try {
-    if (description) {
-      console.log("Received a description!!!");
-      
-      var readyForOffer =
-        !clientIs.makingOffer &&
-        (pc.signalingState == "stable" || clientIs.settingRemoteAnswerPending);
-
-      var offerCollision = description.type == "answer" && !readyForOffer;
-
-      clientIs.ignoringOffer = !clientIs.polite && offerCollision;
-
-      if (clientIs.ignoringOffer) {
-        return;
-      }
-
-      // Set the remote decription
-      // Set the remote description...
-      try {
-        console.log("Trying to set a remote description:\n", description);
-        clientIs.settingRemoteAnswerPending = description.type == "answer";
-        document.getElementById("p1").innerHTML=joinName.value;
-        await pc.setRemoteDescription(description);
-        clientIs.settingRemoteAnswerPending = false;
-      } catch (error) {
-        console.error("Error from setting local description", error);
-      }
-
-      //if it's offer you need to answer
-      if (description.type == "offer") {
-        console.log("Offer description");
-        
-        try {
-          //works for latest browsers
-          await pc.setLocalDescription();
-        } catch (error) {
-          //works for older browsers we pass the answer we created using RTCSession
-          if (pc.signalingState == "have-remote-offer") {
-            // create a answer, if that's what's needed...
-            var offer;
-            console.log("Trying to prepare an answer:");
-            offer = await pc.createAnswer(); //doubt
-            
-
-          } else {
-            // otherwise, create an offer
-            console.log("Trying to prepare an offer:");
-            offer = await pc.createOffer();
-            
-          }
-
-          await pc.setLocalDescription(new RTCSessionDescription(offer)); //doubt
-        } finally {
-          sc.emit('signal', { to: from, from: self_id, description: pc.localDescription });
-        }
-      }
-    } else if (candidate) {
-      console.log("Received a candidate:");
-      console.log(candidate);
-      //safari fix for the blank candidate
-      try {
-        if (candidate.candidate.length > 1) {
-          await pc.addIceCandidate(candidate);
-
-        }
-      } catch (error) {
-        if (!clientIs.ignoringOffer) {
-          throw error;
-        }
-      }
-    }
-  } catch (error) {
-    console.log(error);
-  }
-});
+*/
 
 async function negotiateConnection(pc, clientIs, id) {
   console.log('Need to work with negotiating id', id, '...');
@@ -325,9 +301,13 @@ async function negotiateConnection(pc, clientIs, id) {
       console.log('Making an offer...');
       clientIs.makingOffer = true;
       try {
-        //for latest browsers
+        // Very latest browsers are totally cool with an
+        // argument-less call to setLocalDescription:
         await pc.setLocalDescription();
       } catch(error) {
+        // Older (and not even all that old) browsers
+        // are NOT cool. So because we're making an
+        // offer, we need to prepare an offer:
         console.log('Falling back to older setLocalDescription method when making an offer...');
         var offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -347,29 +327,51 @@ async function negotiateConnection(pc, clientIs, id) {
     console.log(`Sending a candidate to ${id}:\n`, candidate);
     sc.emit('signal', { to: id, from: self_id, candidate: candidate });
   };
+
+// End negotiateConnection() function
 }
 
+
+// Utility function to remove peers: self or disconnects
+function removePeer(peers,id) {
+  var index = peers.indexOf(id);
+  if (index === -1) {
+    return; // no peer with that ID
+  }
+  // Remove from peers array
+  peers.splice(index,1);
+  // Remove from pcs connection object
+  delete pcs[id];
+  // Remove from peer_streams object
+  delete peer_streams[id];
+  return peers;
+}
+
+// Utility function to populate a peer to the pcs object
 function establishPeer(peer,isPolite) {
   pcs[peer] = {};
   pcs[peer].clientIs = {
-    polite: isPolite, 
+    polite: isPolite, // Be impolite with existing peers, who will themselves be polite
     makingOffer: false,
     ignoringOffer: false,
     settingRemoteAnswerPending: false
   };
   pcs[peer].conn = new RTCPeerConnection(rtc_config);
+  // Respond to peer track events
   pcs[peer].conn.ontrack = function({track}) {
     console.log('Heard an ontrack event:\n', track);
+    // Append track to the correct peer stream object
     track.onunmute = function() {
       console.log('Heard an unmute event');
       peer_streams[peer].addTrack(track);
     };
   };
-  appendVideoToRespectivePlayers(peer);
+  appendVideo(peer);
 }
-// Utility funciton to add videos to the DOM
-function appendVideoToRespectivePlayers(peer) {
- // Dhiraj to work on this
+
+// Utility funciton to add videos to the DOM with an empty MediaStream
+function appendVideo(id) {
+ // dhiraj to work on this function
 }
 
 // Utlity function to remove videos from the DOM
@@ -377,14 +379,43 @@ function appendVideoToRespectivePlayers(peer) {
 //   document.querySelector('#video-' + peer.split('#')[1]).remove();
 // }
 
+// Join button
+var callButton = document.querySelector("#join-button");
 
+callButton.addEventListener('click', async function(e) {
+  e.preventDefault();
+  if (joinName.value !== "") {
+    stream = await navigator.mediaDevices.getUserMedia(media_constraints);
+    var selfStream = new MediaStream();
+    selfStream.addTrack(stream.getTracks()[0]);
+    var selfVideo = document.querySelector('#self-video').srcObject = selfStream;
+    for (var pc in pcs) {
+      console.log('Negotiating connection with', pc);
+      // Load up our media stream tracks on any connections that lack them
+      for (var track of stream.getTracks()) {
+        // Some tracks may have already been added, so use a try/catch block here
+        try {
+          pcs[pc].conn.addTrack(track);
+        } catch(err) {
+          console.error(err);
+        }
+      }
+      // Set the wheels in motion to negotiate the connection with each connected peer
+      negotiateConnection(pcs[pc].conn, pcs[pc].clientIs, pc);
+    }
+      } else {
+        alert("Enter your Name!");
+      }
+  
+  // Remove the join button
+  sendJoinedMessage(joinName.value)
+  callButton.remove();
+  // TODO: Add a "Leave Call" button, and buttons for controlling audio/video
 
-//logic to send candidate
-pc.onicecandidate = function ({ candidate }) {
-  sc.emit("signal", { candidate: candidate });
-};
+});
 
-
+// // making another data channel
+// var gdc = null // Game data channel
 
 //---------Ludo Game logic-----------
 
