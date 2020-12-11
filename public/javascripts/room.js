@@ -30,8 +30,8 @@ var peer_streams = {};
 var media_constraints = { video: true, audio: false };
 
 var dc = null;
-// // making another data channel
-var gdc = null // Game data channel
+
+var gdc = null;
 // Handle self video
 // TODO: Add a Start Video button that handles all of this
 // Problems on iOS with requesting media on page load, it seems.
@@ -257,6 +257,20 @@ function addGameDataChannelEventListener(gdc){
 /*
 
 
+function addDataChannelGameEventListner(datachannel) {
+  datachannel.onmessage = function (e) {
+    console.log(`Heard this action: ${e.action}`)
+  };
+
+  datachannel.onopen = function () {
+    
+  };
+
+  datachannel.onclose = function () {
+   
+  };
+  
+}
 
 function sendJoinedMessage(name){
   //send joined message with current timestamp
@@ -269,10 +283,22 @@ function sendJoinedMessage(name){
    })}`
  );
 
+  }
  
- //Player name Display
- console.log("Join Name = "+ joinName.value);
-}
+  function sendLeftMessage(name){
+    //send joined message with current timestamp
+    sc.emit(
+     "joined",
+     `${name} left the chat! at ${new Date().toLocaleTimeString("en-US", {
+       hour12: true,
+       hour: "numeric",
+       minute: "numeric",
+     })}`
+   );
+   
+   //Player name Display
+   console.log("Join Name = "+ joinName.value);
+  }
 
 /*
 
@@ -351,6 +377,7 @@ function establishPeer(peer,isPolite) {
         
         console.log("Creating a data channel on the initiating side");
         dc = pcs[peer].conn.createDataChannel("text chat");
+        addDataChannelEventListner(dc); 
         if (dataChannelArray.indexOf(dc) === -1) dataChannelArray.push(dc);
         // we are letting the polite one estavlish the channe;
         gdc = pcs[peer].conn.createDataChannel("game data");
@@ -397,7 +424,7 @@ function appendVideo(id) {
   divPlayerName.className = "player-name";
   divPlayerName.id = "p2";
 
-  divPlayerName.innerHTML = "Player 2";
+  divPlayerName.innerHTML = "Player";
   div.appendChild(divPlayerName);
   var video = document.createElement('video');
   // Create an empty stream on the peer_streams object;
@@ -421,7 +448,8 @@ function appendVideo(id) {
 function removeVideo(peer) {
   var old_video = document.querySelector('#video-' + peer.split('#')[1]);
   if (old_video) {
-    old_video.remove();
+    old_video.parentElement.remove();
+    sendLeftMessage(joinName.value);
   }
 }
 
@@ -550,7 +578,6 @@ function dontHaveOtherFree() {
     if (block.contains(redpawn1) || block.contains(redpawn2) || block.contains(redpawn3) || block.contains(redpawn4))
      return true;
   }
-
   return false;
 }
 
@@ -579,41 +606,13 @@ dice.addEventListener("click", function (e) {
 
 
     //if number is 6 move pawn from player block to board
-  if(num == 6 && dontHaveOtherFree()){
-    if(text.innerText == 'green'){
-      var g1 = document.querySelector('#g1');
-      g1.appendChild(greenpawn1);
-      currpawn = greenpawn1
-      positions[currpawn] = g1;
-      dice.style.backgroundImage = "url(images/dice.gif)";
-    }else if(text.innerText == 'yellow'){
-      var y1 = document.querySelector('#y1');
-      y1.appendChild(yellowpawn1);
-      currpawn = yellowpawn1
-      positions[currpawn] = y1;
-      dice.style.backgroundImage = "url(images/dice.gif)";
-    }else if(text.innerText == 'blue'){
-      var b1 = document.querySelector('#b1');
-      b1.appendChild(bluepawn1);
-      currpawn = bluepawn1
-      positions[currpawn] = b1;
-      dice.style.backgroundImage = "url(images/dice.gif)";
-    }else{
-      var r1 = document.querySelector('#r1');
-      r1.appendChild(redpawn1);
-      currpawn = redpawn1
-      positions[currpawn] = r1;
-      dice.style.backgroundImage = "url(images/dice.gif)";
+    if(num == 6 && dontHaveOtherFree()){
+        dice.style.backgroundImage = "url(images/" + num + ".jpg)";
+        n = num;
     }
   }
 
-  }
 
-  //If number not 6 change player
-  gdc.onmessage = function(e){
-    var data = JSON.parse(e.data)
-    console.log(`Heard this action: ${data.action}`)
-  }
 });
 
 
@@ -623,12 +622,53 @@ function randomMove(Color, paw, number) {
   NumOfPaw = paw;
   currcolor = Color;
   num = number;
+  console.log("Dice Numer:"+num);
   currpawn = currcolor + "pawn" + NumOfPaw;
   currPos = positions[currpawn];
-  var pcolor = Color.slice(0, 1);
-  var pnum = paw
-  var newnum = pnum + num;
-  newPos = pcolor + newnum;
+  if(currPos == 0 && num == 6){
+      if(currcolor == "red")
+      {
+        newPos = redpawn[0];
+        positions[currpawn] = newPos;
+      }else if(currcolor == "blue"){
+        newPos = bluepawn[0];
+        positions[currpawn] = newPos;
+      }
+      else if(currcolor == "yellow"){
+        newPos = yellowpawn[0];
+        positions[currpawn] = newPos;
+      }
+      else{
+        newPos = greenpawn[0];
+        positions[currpawn] = newPos;
+      }
+  }  
+  
+  if(currPos != 0){
+    var index = positions.findIndex(currPos);
+    var newIndex = index + num;
+    console.log("New Index:"+newIndex);
+    if(currcolor == "red")
+    {
+      newPos = redpawn[newIndex];
+      positions[currpawn] = newPos;
+    }else if(currcolor == "blue"){
+      newPos = bluepawn[newIndex];
+      positions[currpawn] = newPos;
+    }
+    else if(currcolor == "yellow"){
+      newPos = yellowpawn[newIndex];
+      positions[currpawn] = newPos;
+    }
+    else{
+      newPos = greenpawn[newIndex];
+      positions[currpawn] = newPos;
+    }
+  }
+  //var pcolor = Color.slice(0, 1);
+  //var pnum = paw
+  //var newnum = pnum + num;
+  //newPos = pcolor + newnum;
   console.log(newPos)
   var destination = document.querySelector('#'+newPos);
   console.log(currpawn)
@@ -636,7 +676,9 @@ function randomMove(Color, paw, number) {
   destination.appendChild(source);
   positions[currpawn] = destination;
   dice.style.backgroundImage = "url(images/dice.gif)";
-  window.setTimeout(changePlayer, 1000);
+  if(num != 6 && !DontHaveOtherFree()){
+    dice.style.backgroundImage = "url(images/" + num + ".jpg)";
+  }
   clicked = false;
 }
 
