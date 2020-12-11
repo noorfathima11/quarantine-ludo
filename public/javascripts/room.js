@@ -10,15 +10,15 @@ var rtc_config = {
   ]
 };
 
-var pc = new RTCPeerConnection(rtc_config);
-
 // Track self id from socket.io
 var self_id;
 // Array for tracking IDs of connected peers
 // TODO: Refactor this so only the `pcs` object is needed?
 var peers;
 
+var dataChannelArray =[];
 // Object to hold each per-ID RTCPeerConnection and client state
+var gDataChannelArray = []
 var pcs = {};
 
 // Object to hold peer video streams
@@ -30,6 +30,8 @@ var peer_streams = {};
 var media_constraints = { video: true, audio: false };
 
 var dc = null;
+// // making another data channel
+var gdc = null // Game data channel
 // Handle self video
 // TODO: Add a Start Video button that handles all of this
 // Problems on iOS with requesting media on page load, it seems.
@@ -88,11 +90,14 @@ sc.on('new connected peer', function(peer) {
 
 // Rececive payload of newly disconnected peer
 sc.on('new disconnected peer', function(peer) {
-  console.log(`The ${peer} has disconnected`)
-  peers = removePeer(peers, peer)
-  // removeVideo(peer)
-  console.log('The remainning connected peers are:\n', peers)
-})
+  // Logic to remove the disconnected peer from `peers`
+  // Also will need to eventually clean up known peer connections
+  // and UI holding the disconnected peer's video, etc.
+  console.log(`${peer} has disconnected`);
+  peers = removePeer(peers,peer);
+  removeVideo(peer);
+  console.log('Remaining connected peers:\n', peers);
+});
 
 // Signals are now only over private messages to avoid cross-talk
 sc.on('signal', async function({ to, from, candidate, description }) {
@@ -230,42 +235,28 @@ function addDataChannelEventListner(datachannel) {
     msg2= msg2.trim();
     if (msg2 !== "") {
       appendMsgToChatLog(chatLog, msg2, "self");
-      datachannel.send(msg2);
       chatInput.value = "";
+      datachannel.send(msg2);
+
+
+      //Send data to datachanel which are not same
+      dataChannelArray.forEach((dc)=>{
+        if(datachannel != dc){
+          dc.send(msg2);
+        }
+      });
+      
     }
   });
 }
 
-sc.on("joined", function (e) {
-  appendMsgToChatLog(chatLog, e, "join");
-});
+function addGameDataChannelEventListener(gdc){
 
-//Once the RTC connection is steup and connected the peer will open data channel
-pc.onconnectionstatechange = function (e) {
-  if (pc.connectionState == "connected") {
-    if (clientIs.polite) {
-      console.log("Creating a data channel on the initiating side");
-      dc = pc.createDataChannel("text chat");
-      // we are letting the polite one estavlish the channe;
-      gdc = pc.createDataChannel("game data") 
-      addDataChannelEventListner(dc); 
-      // need to add game events
-    }
-  }
-};
+}
 
-//listen for datachannel
-// This will on fire on receiving end of the connection
-pc.ondatachannel = function (e) {
-  console.log("Data Channel is open");
-  if(e.channel.label == 'text chat'){
-    dc = e.channel;
-    addDataChannelEventListner(dc);
-  }
-  if(e.channel.label == "game data"){
-    gdc = e.channel
-  }
-};
+/*
+
+
 
 function sendJoinedMessage(name){
   //send joined message with current timestamp
@@ -281,11 +272,6 @@ function sendJoinedMessage(name){
  
  //Player name Display
  console.log("Join Name = "+ joinName.value);
-}
-
-// Here we are listening for and attaching any peer tracks
-pc.ontrack = function(track){
- peerStream.addTrack(track.track)
 }
 
 /*
@@ -358,6 +344,38 @@ function establishPeer(peer,isPolite) {
   };
   pcs[peer].conn = new RTCPeerConnection(rtc_config);
   // Respond to peer track events
+
+  //Create data channels for peers
+  pcs[peer].conn.onconnectionstatechange = function (e) {
+    if (pcs[peer].conn.connectionState == "connected") {
+        
+        console.log("Creating a data channel on the initiating side");
+        dc = pcs[peer].conn.createDataChannel("text chat");
+        if (dataChannelArray.indexOf(dc) === -1) dataChannelArray.push(dc);
+        // we are letting the polite one estavlish the channe;
+        gdc = pcs[peer].conn.createDataChannel("game data");
+        if (dataChannelArray.indexOf(gdc) === -1) gDataChannelArray.push(gdc);
+        addDataChannelEventListner(dc); 
+        // need to add game events
+        addGameDataChannelEventListener(gdc)
+      }
+    
+  };
+  
+  //listen for datachannel
+  // This will on fire on receiving end of the connection
+  pcs[peer].conn.ondatachannel = function (e) {
+    console.log("Data Channel is open");
+    if(e.channel.label == 'text chat'){
+      dc = e.channel;
+      addDataChannelEventListner(dc);
+    }
+    if(e.channel.label == "game data"){
+      gdc = e.channel
+      addGameDataChannelEventListener(gdc)
+    }
+  };
+
   pcs[peer].conn.ontrack = function({track}) {
     console.log('Heard an ontrack event:\n', track);
     // Append track to the correct peer stream object
@@ -371,13 +389,41 @@ function establishPeer(peer,isPolite) {
 
 // Utility funciton to add videos to the DOM with an empty MediaStream
 function appendVideo(id) {
- // dhiraj to work on this function
+  var videos = document.querySelector('#room-grid');
+  var div = document.createElement("div");
+  div.className = "room-video";
+  var divPlayerName = document.createElement("div");
+
+  divPlayerName.className = "player-name";
+  divPlayerName.id = "p2";
+
+  divPlayerName.innerHTML = "Player 2";
+  div.appendChild(divPlayerName);
+  var video = document.createElement('video');
+  // Create an empty stream on the peer_streams object;
+  // Remote track will be added later
+  video.autoplay = true;
+  video.width = "100%";
+  video.height="100%";
+  video.autoplay = true;
+  video.playsinline = true;
+  peer_streams[id] = new MediaStream();
+  video.autoplay = true;
+  video.className = "room-video-stream";
+  video.id = "video-" + id.split('#')[1];
+  // Set the video source to the empty peer stream
+  video.srcObject = peer_streams[id];
+  div.appendChild(video);
+  videos.appendChild(div);
 }
 
 // Utlity function to remove videos from the DOM
-// function removeVideo(peer) {
-//   document.querySelector('#video-' + peer.split('#')[1]).remove();
-// }
+function removeVideo(peer) {
+  var old_video = document.querySelector('#video-' + peer.split('#')[1]);
+  if (old_video) {
+    old_video.remove();
+  }
+}
 
 // Join button
 var callButton = document.querySelector("#join-button");
@@ -403,19 +449,18 @@ callButton.addEventListener('click', async function(e) {
       // Set the wheels in motion to negotiate the connection with each connected peer
       negotiateConnection(pcs[pc].conn, pcs[pc].clientIs, pc);
     }
+      // Remove the join button
+  sendJoinedMessage(joinName.value)
+  callButton.remove();
+  joinForm.remove();
       } else {
         alert("Enter your Name!");
       }
   
-  // Remove the join button
-  sendJoinedMessage(joinName.value)
-  callButton.remove();
+
   // TODO: Add a "Leave Call" button, and buttons for controlling audio/video
 
 });
-
-// // making another data channel
-// var gdc = null // Game data channel
 
 //---------Ludo Game logic-----------
 
@@ -614,4 +659,19 @@ yellowpawn1.addEventListener("click", function () {
 bluepawn1.addEventListener("click", function () {
   var color = text.innerHTML;
   randomMove(color,1,n);
+});
+
+bluepawn2.addEventListener("click", function () {
+  var color = text.innerHTML;
+  randomMove(color,2,n);
+});
+
+bluepawn3.addEventListener("click", function () {
+  var color = text.innerHTML;
+  randomMove(color,3,n);
+});
+
+bluepawn4.addEventListener("click", function () {
+  var color = text.innerHTML;
+  randomMove(color,4,n);
 });
