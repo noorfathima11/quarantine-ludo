@@ -251,7 +251,15 @@ function addDataChannelEventListner(datachannel) {
 }
 
 function addGameDataChannelEventListener(gdc){
+  gdc.onmessage = function(e) {
+    console.log("Heard this action", e.data.action)
+  }
 
+  badtext.addEventListener("fire", function(e){
+    badtext.innerHTML = e.data.message
+  })
+
+  
 }
 
 /*
@@ -284,23 +292,25 @@ function sendJoinedMessage(name){
  );
 
   }
+*/
+function sendLeftMessage(name){
+  //send joined message with current timestamp
+  sc.emit(
+   "joined",
+   `${name} left the chat! at ${new Date().toLocaleTimeString("en-US", {
+     hour12: true,
+     hour: "numeric",
+     minute: "numeric",
+   })}`
+ );
  
-  function sendLeftMessage(name){
-    //send joined message with current timestamp
-    sc.emit(
-     "joined",
-     `${name} left the chat! at ${new Date().toLocaleTimeString("en-US", {
-       hour12: true,
-       hour: "numeric",
-       minute: "numeric",
-     })}`
-   );
-   
-   //Player name Display
-   console.log("Join Name = "+ joinName.value);
-  }
+ //Player name Display
+ console.log("Join Name = "+ joinName.value);
+}
+
 
 /*
+
 
   NEGOTIATE PEER CONNECTIONS
 
@@ -358,7 +368,7 @@ function removePeer(peers,id) {
   delete peer_streams[id];
   return peers;
 }
-
+var gDataChannel = null;
 // Utility function to populate a peer to the pcs object
 function establishPeer(peer,isPolite) {
   pcs[peer] = {};
@@ -382,8 +392,8 @@ function establishPeer(peer,isPolite) {
         // we are letting the polite one estavlish the channe;
         gdc = pcs[peer].conn.createDataChannel("game data");
         if (dataChannelArray.indexOf(gdc) === -1) gDataChannelArray.push(gdc);
-        addDataChannelEventListner(dc); 
         // need to add game events
+        gDataChannel = gdc
         addGameDataChannelEventListener(gdc)
       }
     
@@ -399,7 +409,7 @@ function establishPeer(peer,isPolite) {
     }
     if(e.channel.label == "game data"){
       gdc = e.channel
-      addGameDataChannelEventListener(gdc)
+      //addGameDataChannelEventListener(gdc)
     }
   };
 
@@ -593,7 +603,12 @@ dice.addEventListener("click", function (e) {
     
     if (num != 6 && dontHaveOtherFree()) {
       badtext.innerText = "Unfortunately you are stuck";
-      gdc.send({ data: { action: 'fire', message: badtext.innerText } });
+      gDataChannelArray.forEach((gdc) => {
+        gdc.send({ data: { action: 'fire', message: badtext.innerText } })
+        console.log("gdc", gdc)
+        addGameDataChannelEventListener(gdc)
+      })
+      
       window.setTimeout(changePlayer, 1000);
       clicked = false;
     }
@@ -614,6 +629,7 @@ dice.addEventListener("click", function (e) {
 
 
 });
+
 
 
 
